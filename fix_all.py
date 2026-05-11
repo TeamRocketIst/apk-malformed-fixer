@@ -12,7 +12,7 @@ def fix_all(inp, outp):
     try:
         fix_apk(inp, stage, zipfile.ZIP_STORED)
         #extract_zip_raw(stage, ext)
-        os.system("unzip fixed.apk -d "+ext)
+        os.system(f"unzip {tmp}/fixed.apk -d "+ext)
         #fix_axml(ext, ext)
         for root, _, files in os.walk(ext):
             for f in files:
