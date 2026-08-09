@@ -122,6 +122,28 @@ def fix_arsc(file_path, out_path):
                 '<IIIII', data[sp_header_offset:sp_header_offset+20]
             )
 
+            # string and style offset arrays must fit in the region between the
+            # string-pool header and stringsStart.  Clamp a forged count before
+            # walking the array so string payload bytes are never overwritten.
+            offsets_bytes = str_start - chunk_header_size
+            if offsets_bytes < 0:
+                raise ValueError(
+                    f"String pool at 0x{offset:X} has stringsStart before its header"
+                )
+            offsets_capacity = offsets_bytes // 4
+            required_offsets = str_count + style_count
+            if required_offsets > offsets_capacity:
+                fixed_str_count = max(0, offsets_capacity - style_count)
+                print(
+                    f"[!] TRICK 2: Clamped forged stringCount at 0x{offset:X}: "
+                    f"{str_count} -> {fixed_str_count}"
+                )
+                data[sp_header_offset:sp_header_offset+4] = struct.pack(
+                    '<I', fixed_str_count
+                )
+                str_count = fixed_str_count
+                fixed_count += 1
+
             if style_count == 0 and style_start != 0:
                 print(f"[!] TRICK 2: Trap Detected at 0x{offset:X}. Fake style_start {style_start}. Forcing to 0...")
                 data[sp_header_offset+16 : sp_header_offset+20] = struct.pack('<I', 0)

@@ -59,6 +59,7 @@ def fix_axml(file_path, out_path):
     # 2. Chunk Walker
     offset = header_size
     fixed_count = 0
+    string_count = None
 
     while offset < file_size:
         if offset + 8 > file_size:
@@ -92,6 +93,32 @@ def fix_axml(file_path, out_path):
             str_count, style_count, flags, str_start, style_start = struct.unpack(
                 '<IIIII', data[sp_header_offset:sp_header_offset+20]
             )
+
+            # The offset arrays live between header_size and stringsStart.  A
+            # forged stringCount can make parsers interpret the string bytes as
+            # offsets (the protection used by this sample).  Repair the count
+            # before inspecting any offsets; zeroing the apparent "bad offsets"
+            # would otherwise destroy the actual strings.
+            offsets_bytes = str_start - chunk_header_size
+            if offsets_bytes < 0:
+                raise ValueError(
+                    f"String pool at 0x{offset:X} has stringsStart before its header"
+                )
+            offsets_capacity = offsets_bytes // 4
+            required_offsets = str_count + style_count
+            if required_offsets > offsets_capacity:
+                fixed_str_count = max(0, offsets_capacity - style_count)
+                print(
+                    f"[!] TRICK 2: Clamped forged stringCount at 0x{offset:X}: "
+                    f"{str_count} -> {fixed_str_count}"
+                )
+                data[sp_header_offset:sp_header_offset+4] = struct.pack(
+                    '<I', fixed_str_count
+                )
+                str_count = fixed_str_count
+                fixed_count += 1
+
+            string_count = str_count
 
             if style_count > 0 and style_start > str_start:
                 max_str_offset = style_start - str_start
@@ -147,6 +174,60 @@ def fix_axml(file_path, out_path):
                     dprint(f"[DEBUG] Shrunk Element Chunk from {chunk_size} -> {new_chunk_size} bytes")
                     chunk_size = new_chunk_size
                     fixed_count += 1
+
+                # Drop attributes whose raw or typed string index is outside
+                # the repaired pool.  In this sample a bogus android:tag is
+                # appended to every element solely to poison JADX's decoder.
+                if string_count is not None:
+                    attr_start, attr_size, attr_count = struct.unpack(
+                        '<HHH', data[ext_ptr+8 : ext_ptr+14]
+                    )
+                    invalid = []
+                    for i in range(attr_count):
+                        attr_base = ext_ptr + attr_start + (i * attr_size)
+                        if attr_base + 20 > offset + chunk_size:
+                            raise ValueError(
+                                f"Attribute {i} at 0x{offset:X} exceeds its chunk"
+                            )
+                        raw_value = struct.unpack(
+                            '<I', data[attr_base+8:attr_base+12]
+                        )[0]
+                        value_type = data[attr_base+15]
+                        value_data = struct.unpack(
+                            '<I', data[attr_base+16:attr_base+20]
+                        )[0]
+                        bad_raw = raw_value != 0xFFFFFFFF and raw_value >= string_count
+                        bad_typed = value_type == 0x03 and value_data >= string_count
+                        if bad_raw or bad_typed:
+                            invalid.append(i)
+
+                    if invalid:
+                        id_index, class_index, style_index = struct.unpack(
+                            '<HHH', data[ext_ptr+14:ext_ptr+20]
+                        )
+                        special = [id_index, class_index, style_index]
+                        for i in reversed(invalid):
+                            attr_base = ext_ptr + attr_start + (i * attr_size)
+                            del data[attr_base:attr_base + attr_size]
+                            one_based = i + 1
+                            special = [
+                                0 if value == one_based else
+                                value - 1 if value > one_based else value
+                                for value in special
+                            ]
+                        removed_size = len(invalid) * attr_size
+                        attr_count -= len(invalid)
+                        data[ext_ptr+12:ext_ptr+14] = struct.pack('<H', attr_count)
+                        data[ext_ptr+14:ext_ptr+20] = struct.pack('<HHH', *special)
+                        chunk_size -= removed_size
+                        data[offset+4:offset+8] = struct.pack('<I', chunk_size)
+                        file_size -= removed_size
+                        data[4:8] = struct.pack('<I', file_size)
+                        fixed_count += len(invalid)
+                        print(
+                            f"[!] Removed {len(invalid)} attribute(s) with "
+                            f"out-of-range string references at 0x{offset:X}"
+                        )
 
         # Jump to the next chunk
         offset += chunk_size
