@@ -10,9 +10,7 @@ $ python3 fix_all.py -i malformed.apk -o fixed.apk
 ```
 
 `fix_all.py` repairs the ZIP metadata first, then fixes forged binary XML and
-resource-table fields. In particular, string-pool counts are bounded by the
-space available before `stringsStart`; payload bytes are not treated as an
-unbounded offset array.
+resource-table fields.
 
 ## Validation
 
@@ -34,7 +32,6 @@ resource errors such as `Error decode: AndroidManifest.xml` or
 Rebuilding or changing any APK invalidates its original signature. This tool's
 output is intended for analysis; sign it with an authorized key if an
 installable test build is required.
-
 
 
 ## Individual fix for debugging purposes

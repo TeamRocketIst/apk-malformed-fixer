@@ -175,9 +175,7 @@ def fix_axml(file_path, out_path):
                     chunk_size = new_chunk_size
                     fixed_count += 1
 
-                # Drop attributes whose raw or typed string index is outside
-                # the repaired pool.  In this sample a bogus android:tag is
-                # appended to every element solely to poison JADX's decoder.
+                # Drop attributes whose raw or typed string index is outside the repaired pool.
                 if string_count is not None:
                     attr_start, attr_size, attr_count = struct.unpack(
                         '<HHH', data[ext_ptr+8 : ext_ptr+14]
