@@ -93,8 +93,10 @@ def fix_all(inp, outp):
                 p = os.path.join(root, f)
 
                 if f == "resources.arsc":
-                    try: fix_arsc(p, p)
-                    except Exception as e: print(e)
+                    try:
+                        fix_arsc(p, p)
+                    except Exception as e:
+                        print(f"[-] Failed to repair {p}: {e}")
 
                 elif f.endswith(".xml"):
                     try:
@@ -102,8 +104,8 @@ def fix_all(inp, outp):
                             if fp.read(2) == b'\x03\x00':
                                 fix_axml(p, p)
                     except Exception as e:
-                        print(e)
-        print(outp, ext)
+                        print(f"[-] Failed to repair {p}: {e}")
+        print(f"[*] Repacking {ext} -> {outp}")
         with zipfile.ZipFile(outp, "w", zipfile.ZIP_DEFLATED) as z:
             for root, _, files in os.walk(ext):
                 for f in files:
@@ -116,10 +118,15 @@ def fix_all(inp, outp):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-if __name__ == "__main__":
+
+def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--input", required=True)
     ap.add_argument("-o", "--output", required=True)
     a = ap.parse_args()
 
     fix_all(a.input, a.output)
+
+
+if __name__ == "__main__":
+    main()

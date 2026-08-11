@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apk-malformed-fixer"
+version = "0.1.0"
+description = "Repair malformed APK, AXML, and ARSC structures"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+    { name = "ada-l0velace" }
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/TeamRocketIst/apk-malformed-fixer"
+
+[project.scripts]
+apkfix = "fix_all:main"
+apkfix-zip = "fix_apk:main"
+apkfix-axml = "fix_axml:main"
+apkfix-arsc = "fix_asrc:main"
+
+[tool.setuptools]
+py-modules = ["fix_all", "fix_apk", "fix_axml", "fix_asrc"]

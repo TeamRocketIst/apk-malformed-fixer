@@ -1,12 +1,66 @@
 # apk-malformed-fixer
 Fixes malformed apks, axml files and arsc 
 
+## Installation
+
+Run all installation commands inside a virtual environment. Do not install the
+package into the system Python environment.
+
+Install locally on Linux or macOS:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
+```
+
+Use an editable install while developing:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+Install directly from GitHub:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install git+https://github.com/TeamRocketIst/apk-malformed-fixer.git
+```
+
+Install locally on Windows PowerShell:
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install .
+```
+
+The package has no runtime dependencies outside the Python standard library.
+
 
 ## Fix all
 
 Fix everything and recreate the zip file:
 ```bash
 $ python3 fix_all.py -i malformed.apk -o fixed.apk
+```
+
+When installed as a package, use:
+
+```bash
+apkfix -i malformed.apk -o fixed.apk
+```
+
+The installed commands are:
+
+```bash
+apkfix -i malformed.apk -o fixed.apk
+apkfix-zip -i malformed.apk -o fixed.apk
+apkfix-axml AndroidManifest.xml
+apkfix-arsc resources.arsc
 ```
 
 `fix_all.py` repairs the ZIP metadata first, then fixes forged binary XML and
@@ -38,18 +92,21 @@ installable test build is required.
 Fix only the zip:
 ```bash
 $ python3 fix_apk.py -i malformed.apk -o fixed.apk
+$ apkfix-zip -i malformed.apk -o fixed.apk
 ```
 
 Fix only the axml:
 ```bash
 unzip fixed.apk -d out 
 $ python3 fix_axml.py out
+$ apkfix-axml out
 ```
 
 Fix only the arsc:
 ```bash
 unzip fixed.apk -d out 
 $ python3 fix_asrc.py out/resources.arsc
+$ apkfix-arsc out/resources.arsc
 ```
 
 Restore back to zip:

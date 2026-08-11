@@ -1,13 +1,13 @@
-import sys
-import struct
+import argparse
 import os
+import struct
 
 # --- GLOBAL SETTINGS ---
-DEBUG = True
+DEBUG = False
 
 def dprint(msg):
     if DEBUG:
-        print(msg)
+        print(f"[DEBUG] {msg}")
 
 # Standard ARSC Chunk Types
 RES_TABLE_TYPE = 0x0002
@@ -39,12 +39,12 @@ CHUNK_NAMES = {
 }
 
 def fix_arsc(file_path, out_path):
-    print(f"\n[*] Processing ARSC: {file_path}")
+    dprint(f"Processing ARSC: {file_path}")
     with open(file_path, 'rb') as f:
         data = bytearray(f.read())
 
     file_size = len(data)
-    dprint(f"[DEBUG] Physical file size on disk: {file_size} bytes")
+    dprint(f"Physical file size on disk: {file_size} bytes")
     
     if file_size < 12:
         print("[-] File is too small to be an ARSC.")
@@ -52,7 +52,7 @@ def fix_arsc(file_path, out_path):
 
     # 1. Parse ARSC Header (12 bytes)
     arsc_type, header_size, total_size, package_count = struct.unpack('<HHII', data[0:12])
-    dprint(f"[DEBUG] Header -> Magic: 0x{arsc_type:04X} | HSize: {header_size} | Declared Total: {total_size} | Packages: {package_count}")
+    dprint(f"Header -> Magic: 0x{arsc_type:04X} | HSize: {header_size} | Declared Total: {total_size} | Packages: {package_count}")
     
     if arsc_type != RES_TABLE_TYPE:
         print(f"[-] Invalid ARSC magic (Found 0x{arsc_type:04X}). Skipping.")
@@ -81,14 +81,14 @@ def fix_arsc(file_path, out_path):
 
     while offset < file_size:
         if offset + 8 > file_size:
-            dprint(f"[DEBUG] Offset 0x{offset:X} is too close to EOF. Stopping walk.")
+            dprint(f"Offset 0x{offset:X} is too close to EOF. Stopping walk.")
             break
 
         chunk_type, chunk_header_size, chunk_size = struct.unpack('<HHI', data[offset:offset+8])
         chunk_name = CHUNK_NAMES.get(chunk_type, "UNKNOWN")
         
         # Condensed 1-line Debug Output
-        dprint(f"[DEBUG] @ 0x{offset:08X} | {chunk_name} (0x{chunk_type:04X}) | HSize: {chunk_header_size} | CSize: {chunk_size}")
+        dprint(f"@ 0x{offset:08X} | {chunk_name} (0x{chunk_type:04X}) | HSize: {chunk_header_size} | CSize: {chunk_size}")
         
         # Kill 0-byte chunk infinite loops
         if chunk_size < 8:
@@ -102,6 +102,43 @@ def fix_arsc(file_path, out_path):
         # TRICK 0: Step INTO Package Containers
         if chunk_type == RES_TABLE_PACKAGE_TYPE:
             current_package_offset = offset
+            standard_header_size = 0x120
+            if chunk_header_size > standard_header_size:
+                excess = chunk_header_size - standard_header_size
+                child_offset = offset + chunk_header_size
+                package_end = offset + chunk_size
+                if child_offset + 8 > package_end or package_end > file_size:
+                    raise ValueError(f"Invalid package bounds at 0x{offset:X}")
+                child_type, child_header_size, child_size = struct.unpack(
+                    '<HHI', data[child_offset:child_offset+8]
+                )
+                if (
+                    child_type not in VALID_ARSC_CHUNKS or
+                    child_header_size < 8 or child_size < child_header_size or
+                    child_offset + child_size > package_end
+                ):
+                    raise ValueError(f"Invalid package child at 0x{child_offset:X}")
+                for field_offset in (0x10C, 0x114):
+                    field = offset + field_offset
+                    value = struct.unpack('<I', data[field:field+4])[0]
+                    if standard_header_size < value < chunk_header_size:
+                        raise ValueError(
+                            f"Package pointer enters padded header at 0x{field:X}"
+                        )
+                    if value >= chunk_header_size:
+                        data[field:field+4] = struct.pack('<I', value - excess)
+                del data[offset+standard_header_size:child_offset]
+                chunk_header_size = standard_header_size
+                chunk_size -= excess
+                file_size -= excess
+                data[offset+2:offset+4] = struct.pack('<H', chunk_header_size)
+                data[offset+4:offset+8] = struct.pack('<I', chunk_size)
+                data[4:8] = struct.pack('<I', file_size)
+                fixed_count += 1
+                print(
+                    f"[!] Normalized package header at 0x{offset:X}: "
+                    f"removed {excess} bytes"
+                )
             offset += chunk_header_size
             continue
 
@@ -219,11 +256,15 @@ def fix_arsc(file_path, out_path):
             f.write(data)
         print(f"\n[+] Successfully neutralized {fixed_count} ARSC traps. Saved to: {out_path}")
     else:
-        print("\n[+] No traps detected. ARSC file is clean.")
+        dprint("No ARSC traps detected")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Fix malformed ARSC files')
+    parser.add_argument('target', help='resources.arsc file')
+    args = parser.parse_args()
+    fix_arsc(args.target, args.target)
+
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: python fix_arsc.py <resources.arsc>")
-    else:
-        target = sys.argv[1]
-        fix_arsc(target, target)
+    main()

@@ -212,11 +212,25 @@ def fix_apk(apk_name, apk_output, cp_type):
         f.write(scan_buff)
     print(f"[+] Fixed APK saved to {apk_output}")
 
-if __name__ == '__main__':
+
+def main():
     parser = argparse.ArgumentParser(description='Fix malformed APKs')
     parser.add_argument('-i', '--input', required=True, help='Input APK file')
     parser.add_argument('-o', '--output', required=True, help='Output APK file')
-    parser.add_argument('-c', '--compression', choices=['zipstored', 'zipdeflated'], default='zipstored', help='Compression type to replace on invalid type entries')
+    parser.add_argument(
+        '-c',
+        '--compression',
+        choices=['zipstored', 'zipdeflated'],
+        default='zipstored',
+        help='Compression type to replace on invalid type entries'
+    )
     args = parser.parse_args()
-    types_comp = {'zipstored': zipfile.ZIP_STORED, 'zipdeflated': zipfile.ZIP_DEFLATED}
+    types_comp = {
+        'zipstored': zipfile.ZIP_STORED,
+        'zipdeflated': zipfile.ZIP_DEFLATED
+    }
     fix_apk(args.input, args.output, types_comp[args.compression])
+
+
+if __name__ == '__main__':
+    main()

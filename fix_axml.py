@@ -1,13 +1,13 @@
-import sys
-import struct
+import argparse
 import os
+import struct
 
 # --- GLOBAL SETTINGS ---
-DEBUG = True
+DEBUG = False
 
 def dprint(msg):
     if DEBUG:
-        print(msg)
+        print(f"[DEBUG] {msg}")
 
 # Standard AXML Chunk Types Whitelist
 RES_XML_TYPE = 0x0003
@@ -37,12 +37,12 @@ CHUNK_NAMES = {
 }
 
 def fix_axml(file_path, out_path):
-    print(f"\n[*] Processing: {file_path}")
+    dprint(f"Processing AXML: {file_path}")
     with open(file_path, 'rb') as f:
         data = bytearray(f.read())
 
     file_size = len(data)
-    dprint(f"[DEBUG] Physical file size on disk: {file_size} bytes")
+    dprint(f"Physical file size on disk: {file_size} bytes")
     
     if file_size < 8:
         print("[-] File is too small to be an AXML.")
@@ -50,7 +50,7 @@ def fix_axml(file_path, out_path):
 
     # 1. Parse AXML Header
     axml_type, header_size, total_size = struct.unpack('<HHI', data[0:8])
-    dprint(f"[DEBUG] Header -> Magic: 0x{axml_type:04X} | HSize: {header_size} | Declared Total: {total_size}")
+    dprint(f"Header -> Magic: 0x{axml_type:04X} | HSize: {header_size} | Declared Total: {total_size}")
     
     if axml_type != RES_XML_TYPE:
         print(f"[-] Invalid AXML magic. Skipping.")
@@ -63,14 +63,14 @@ def fix_axml(file_path, out_path):
 
     while offset < file_size:
         if offset + 8 > file_size:
-            dprint(f"[DEBUG] Offset 0x{offset:X} is too close to EOF. Stopping walk.")
+            dprint(f"Offset 0x{offset:X} is too close to EOF. Stopping walk.")
             break
 
         chunk_type, chunk_header_size, chunk_size = struct.unpack('<HHI', data[offset:offset+8])
         chunk_name = CHUNK_NAMES.get(chunk_type, "UNKNOWN")
         
         # Condensed 1-line Debug Output
-        dprint(f"[DEBUG] @ 0x{offset:04X} | {chunk_name} (0x{chunk_type:04X}) | HSize: {chunk_header_size} | CSize: {chunk_size}")
+        dprint(f"@ 0x{offset:04X} | {chunk_name} (0x{chunk_type:04X}) | HSize: {chunk_header_size} | CSize: {chunk_size}")
         
         if chunk_size < 8:
             print(f"[!] Corrupted chunk size at 0x{offset:X}. Stopping walk.")
@@ -171,7 +171,7 @@ def fix_axml(file_path, out_path):
                     data[4:8] = struct.pack('<I', file_size)
                     
                     # 4. IMPORTANT: Update our local chunk_size variable so the walker jumps correctly!
-                    dprint(f"[DEBUG] Shrunk Element Chunk from {chunk_size} -> {new_chunk_size} bytes")
+                    dprint(f"Shrunk Element Chunk from {chunk_size} -> {new_chunk_size} bytes")
                     chunk_size = new_chunk_size
                     fixed_count += 1
 
@@ -227,6 +227,32 @@ def fix_axml(file_path, out_path):
                             f"out-of-range string references at 0x{offset:X}"
                         )
 
+                attr_start, attr_size, attr_count = struct.unpack(
+                    '<HHH', data[ext_ptr+8:ext_ptr+14]
+                )
+                attributes_end = (
+                    chunk_header_size
+                    + attr_start
+                    + attr_size * attr_count
+                )
+                trailing_size = chunk_size - attributes_end
+                trailing_start = offset + attributes_end
+                trailing = data[trailing_start:offset+chunk_size]
+                if (
+                    8 <= trailing_size <= 28 and trailing_size % 4 == 0 and
+                    not any(trailing[4:])
+                ):
+                    del data[trailing_start:offset+chunk_size]
+                    chunk_size -= trailing_size
+                    data[offset+4:offset+8] = struct.pack('<I', chunk_size)
+                    file_size -= trailing_size
+                    data[4:8] = struct.pack('<I', file_size)
+                    fixed_count += 1
+                    print(
+                        f"[!] Removed {trailing_size} forged element tail bytes "
+                        f"at 0x{offset:X}"
+                    )
+
         # Jump to the next chunk
         offset += chunk_size
 
@@ -235,18 +261,22 @@ def fix_axml(file_path, out_path):
             f.write(data)
         print(f"[+] Successfully neutralized {fixed_count} total traps. Saved to: {out_path}")
     else:
-        print("[+] No traps detected. File is clean.")
+        dprint("No AXML traps detected")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Fix malformed binary XML files')
+    parser.add_argument('target', help='Binary XML file or directory')
+    args = parser.parse_args()
+    if os.path.isdir(args.target):
+        for root, _, files in os.walk(args.target):
+            for file in files:
+                if file.endswith('.xml'):
+                    full_path = os.path.join(root, file)
+                    fix_axml(full_path, full_path)
+    else:
+        fix_axml(args.target, args.target)
+
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: python universal_axml_fixer.py <target_file_or_directory>")
-    else:
-        target = sys.argv[1]
-        if os.path.isdir(target):
-            for root, dirs, files in os.walk(target):
-                for file in files:
-                    if file.endswith('.xml'):
-                        full_path = os.path.join(root, file)
-                        fix_axml(full_path, full_path)
-        else:
-            fix_axml(target, target)
+    main()
