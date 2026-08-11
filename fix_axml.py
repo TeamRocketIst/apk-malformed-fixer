@@ -36,6 +36,162 @@ CHUNK_NAMES = {
     0x0104: "RES_XML_CDATA"
 }
 
+ANDROID_ATTRIBUTE_NAMES = {
+    0x01010000: 'theme',
+    0x01010001: 'label',
+    0x01010002: 'icon',
+    0x01010003: 'name',
+    0x01010006: 'permission',
+    0x0101000D: 'persistent',
+    0x0101000E: 'enabled',
+    0x0101000F: 'debuggable',
+    0x01010010: 'exported',
+    0x01010017: 'excludeFromRecents',
+    0x01010018: 'authorities',
+    0x0101001C: 'priority',
+    0x0101001D: 'launchMode',
+    0x01010024: 'value',
+    0x01010025: 'resource',
+    0x01010027: 'scheme',
+    0x0101020C: 'minSdkVersion',
+    0x0101021B: 'versionCode',
+    0x0101021C: 'versionName',
+    0x0101022D: 'noHistory',
+    0x01010270: 'targetSdkVersion',
+    0x01010280: 'allowBackup',
+    0x010102D3: 'hardwareAccelerated',
+    0x0101035A: 'largeHeap',
+    0x010103AF: 'supportsRtl',
+    0x010104EB: 'fullBackupContent',
+    0x010104EC: 'usesCleartextTraffic',
+    0x01010505: 'directBootAware',
+    0x01010572: 'compileSdkVersion',
+    0x01010573: 'compileSdkVersionCodename',
+    0x0101057A: 'appComponentFactory',
+    0x01010599: 'foregroundServiceType',
+    0x01010603: 'requestLegacyExternalStorage'
+}
+
+
+def decode_length8(data, offset):
+    value = data[offset]
+    if value & 0x80:
+        return ((value & 0x7F) << 8) | data[offset + 1], 2
+    return value, 1
+
+
+def decode_length16(data, offset):
+    value = struct.unpack_from('<H', data, offset)[0]
+    if value & 0x8000:
+        low = struct.unpack_from('<H', data, offset + 2)[0]
+        return ((value & 0x7FFF) << 16) | low, 4
+    return value, 2
+
+
+def encode_length8(value):
+    if value > 0x7FFF:
+        raise ValueError("UTF-8 string is too long")
+    if value > 0x7F:
+        return bytes((0x80 | (value >> 8), value & 0xFF))
+    return bytes((value,))
+
+
+def encode_length16(value):
+    if value > 0x7FFFFFFF:
+        raise ValueError("UTF-16 string is too long")
+    if value > 0x7FFF:
+        return struct.pack('<HH', 0x8000 | (value >> 16), value & 0xFFFF)
+    return struct.pack('<H', value)
+
+
+def read_pool_strings(data, offset, header_size, string_count, flags, strings_start):
+    values = []
+    for index in range(string_count):
+        relative = struct.unpack_from(
+            '<I', data, offset + header_size + index * 4
+        )[0]
+        cursor = offset + strings_start + relative
+        if flags & 0x100:
+            _, size = decode_length8(data, cursor)
+            cursor += size
+            byte_length, size = decode_length8(data, cursor)
+            cursor += size
+            values.append(data[cursor:cursor + byte_length].decode('utf-8', 'replace'))
+        else:
+            char_length, size = decode_length16(data, cursor)
+            cursor += size
+            values.append(
+                data[cursor:cursor + char_length * 2].decode('utf-16le', 'replace')
+            )
+    return values
+
+
+def encode_pool_string(value, utf8):
+    if utf8:
+        encoded = value.encode('utf-8')
+        return (
+            encode_length8(len(value))
+            + encode_length8(len(encoded))
+            + encoded
+            + b'\x00'
+        )
+    encoded = value.encode('utf-16le')
+    return encode_length16(len(value)) + encoded + b'\x00\x00'
+
+
+def restore_attribute_names(
+    data, offset, header_size, chunk_size, string_count, style_count,
+    flags, strings_start
+):
+    if style_count != 0:
+        return chunk_size, 0, [], None
+    map_offset = offset + chunk_size
+    if map_offset + 8 > len(data):
+        return chunk_size, 0, [], None
+    map_type, _, map_size = struct.unpack_from('<HHI', data, map_offset)
+    if map_type != RES_XML_RESOURCE_MAP_TYPE or map_size < 8:
+        return chunk_size, 0, [], None
+
+    values = read_pool_strings(
+        data, offset, header_size, string_count, flags, strings_start
+    )
+    resource_ids = [
+        struct.unpack_from('<I', data, map_offset + 8 + index * 4)[0]
+        for index in range((map_size - 8) // 4)
+    ]
+    namespace_uri = 'http://schemas.android.com/apk/res/android'
+    namespace_index = values.index(namespace_uri) if namespace_uri in values else None
+    restored = 0
+    for index, resource_id in enumerate(resource_ids[:len(values)]):
+        replacement = ANDROID_ATTRIBUTE_NAMES.get(resource_id)
+        if not values[index] and replacement:
+            values[index] = replacement
+            restored += 1
+    if restored == 0:
+        return chunk_size, 0, resource_ids, namespace_index
+
+    encoded_strings = bytearray()
+    offsets = []
+    utf8 = bool(flags & 0x100)
+    for value in values:
+        offsets.append(len(encoded_strings))
+        encoded_strings.extend(encode_pool_string(value, utf8))
+    while len(encoded_strings) % 4:
+        encoded_strings.append(0)
+
+    strings_start = header_size + string_count * 4
+    new_size = strings_start + len(encoded_strings)
+    header = bytearray(data[offset:offset + header_size])
+    header[4:8] = struct.pack('<I', new_size)
+    header[20:24] = struct.pack('<I', strings_start)
+    header[24:28] = struct.pack('<I', 0)
+    rebuilt = header
+    rebuilt.extend(b''.join(struct.pack('<I', value) for value in offsets))
+    rebuilt.extend(encoded_strings)
+    data[offset:offset + chunk_size] = rebuilt
+    return new_size, restored, resource_ids, namespace_index
+
+
 def fix_axml(file_path, out_path):
     dprint(f"Processing AXML: {file_path}")
     with open(file_path, 'rb') as f:
@@ -60,6 +216,9 @@ def fix_axml(file_path, out_path):
     offset = header_size
     fixed_count = 0
     string_count = None
+    resource_ids = []
+    android_namespace_index = None
+    namespace_fixed = 0
 
     while offset < file_size:
         if offset + 8 > file_size:
@@ -140,6 +299,22 @@ def fix_axml(file_path, out_path):
                     
             if bad_offsets > 0:
                 print(f"[!] TRICK 2: Neutralized {bad_offsets} out-of-bounds String Pool offsets at 0x{offset:X}")
+
+            old_size = chunk_size
+            (
+                chunk_size,
+                restored,
+                resource_ids,
+                android_namespace_index
+            ) = restore_attribute_names(
+                data, offset, chunk_header_size, chunk_size,
+                str_count, style_count, flags, str_start
+            )
+            if restored:
+                file_size += chunk_size - old_size
+                data[4:8] = struct.pack('<I', file_size)
+                fixed_count += 1
+                print(f"[!] Restored {restored} Android attribute names")
 
         # TRICK 3: The Attribute De-Puffer (JADX Alignment Fix)
         elif chunk_type == RES_XML_START_ELEMENT_TYPE:
@@ -230,6 +405,26 @@ def fix_axml(file_path, out_path):
                 attr_start, attr_size, attr_count = struct.unpack(
                     '<HHH', data[ext_ptr+8:ext_ptr+14]
                 )
+                if android_namespace_index is not None:
+                    for i in range(attr_count):
+                        attr_base = ext_ptr + attr_start + i * attr_size
+                        namespace, name_index = struct.unpack_from(
+                            '<II', data, attr_base
+                        )
+                        if (
+                            namespace == 0xFFFFFFFF and
+                            name_index < len(resource_ids) and
+                            resource_ids[name_index] in ANDROID_ATTRIBUTE_NAMES
+                        ):
+                            struct.pack_into(
+                                '<I', data, attr_base, android_namespace_index
+                            )
+                            namespace_fixed += 1
+                            fixed_count += 1
+
+                attr_start, attr_size, attr_count = struct.unpack(
+                    '<HHH', data[ext_ptr+8:ext_ptr+14]
+                )
                 attributes_end = (
                     chunk_header_size
                     + attr_start
@@ -255,6 +450,9 @@ def fix_axml(file_path, out_path):
 
         # Jump to the next chunk
         offset += chunk_size
+
+    if namespace_fixed:
+        print(f"[!] Restored {namespace_fixed} Android attribute namespaces")
 
     if fixed_count > 0:
         with open(out_path, 'wb') as f:

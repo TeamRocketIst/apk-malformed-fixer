@@ -38,6 +38,60 @@ CHUNK_NAMES = {
     0x0206: "RES_TABLE_STAGED_ALIAS"
 }
 
+RESOURCE_TYPE_NAMES = (
+    'anim', 'animator', 'attr', 'bool', 'color', 'dimen', 'drawable', 'font',
+    'id', 'integer', 'interpolator', 'layout', 'menu', 'mipmap', 'plurals',
+    'string', 'style', 'transition', 'xml'
+)
+
+
+def restore_type_names(data, package_offset):
+    type_strings = struct.unpack_from('<I', data, package_offset + 0x10C)[0]
+    pool_offset = package_offset + type_strings
+    chunk_type, header_size, chunk_size = struct.unpack_from(
+        '<HHI', data, pool_offset
+    )
+    if chunk_type != RES_STRING_POOL_TYPE:
+        return False
+
+    string_count, style_count, flags, strings_start, _ = struct.unpack_from(
+        '<IIIII', data, pool_offset + 8
+    )
+    capacity = (strings_start - header_size) // 4
+    if style_count != 0 or flags & 0x100 or capacity != len(RESOURCE_TYPE_NAMES):
+        return False
+    if string_count < len(RESOURCE_TYPE_NAMES):
+        return False
+
+    offsets = [
+        struct.unpack_from('<I', data, pool_offset + header_size + index * 4)[0]
+        for index in range(len(RESOURCE_TYPE_NAMES))
+    ]
+    values = []
+    for relative in offsets:
+        string_offset = pool_offset + strings_start + relative
+        length = struct.unpack_from('<H', data, string_offset)[0]
+        if length & 0x8000:
+            return False
+        start = string_offset + 2
+        values.append(data[start:start + length * 2].decode('utf-16le'))
+    if not all(value.startswith('##') for value in values):
+        return False
+
+    strings_size = chunk_size - strings_start
+    for index, name in enumerate(RESOURCE_TYPE_NAMES):
+        start = offsets[index]
+        end = offsets[index + 1] if index + 1 < len(offsets) else strings_size
+        encoded = struct.pack('<H', len(name)) + name.encode('utf-16le') + b'\x00\x00'
+        if len(encoded) > end - start:
+            raise ValueError(f"Resource type name {name!r} does not fit")
+        string_offset = pool_offset + strings_start + start
+        data[string_offset:string_offset + end - start] = (
+            encoded + b'\x00' * (end - start - len(encoded))
+        )
+    return True
+
+
 def fix_arsc(file_path, out_path):
     dprint(f"Processing ARSC: {file_path}")
     with open(file_path, 'rb') as f:
@@ -139,6 +193,9 @@ def fix_arsc(file_path, out_path):
                     f"[!] Normalized package header at 0x{offset:X}: "
                     f"removed {excess} bytes"
                 )
+            if restore_type_names(data, current_package_offset):
+                fixed_count += 1
+                print(f"[!] Restored {len(RESOURCE_TYPE_NAMES)} resource type names")
             offset += chunk_header_size
             continue
 
